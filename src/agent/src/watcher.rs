@@ -256,11 +256,7 @@ impl SandboxStorages {
     }
 
     async fn check(&mut self, logger: &Logger) -> Result<()> {
-        for entry in self.0.iter_mut() {
-            if !entry.watch {
-                continue;
-            }
-
+        for entry in self.0.iter_mut().filter(|e| e.watch) {
             entry
                 .clone()
                 .scan(logger)
