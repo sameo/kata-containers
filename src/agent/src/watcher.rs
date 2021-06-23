@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
+use std::usize;
+
+use futures::TryFutureExt;
 
 use tokio::fs;
 use tokio::sync::Mutex;
@@ -258,12 +261,14 @@ impl SandboxStorages {
                 continue;
             }
 
-            match entry.scan(logger).await {
-                Err(error) => {
+            entry
+                .clone()
+                .scan(logger)
+                .or_else(|e| async move {
                     // If an error was observed, we will stop treating this Storage as being watchable, and
                     // instead clean up the target-mount files on the tmpfs and bind mount the source_mount_point
                     // to target_mount_point.
-                    error!(logger, "error observed when watching: {:?}", error);
+                    error!(logger, "error observed when watching: {:?}", e);
                     entry.watch = false;
 
                     // Remove destination contents, but not the directory itself, since this is
@@ -290,11 +295,9 @@ impl SandboxStorages {
                         logger,
                     )
                     .mount()?;
-                }
-                Ok(count) => {
-                    debug!(logger, "watched {} files", count);
-                }
-            };
+                    Ok::<usize, anyhow::Error>(0)
+                })
+                .await?;
         }
 
         Ok(())
