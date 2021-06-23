@@ -253,50 +253,40 @@ impl SandboxStorages {
     }
 
     async fn check(&mut self, logger: &Logger) -> Result<()> {
-        for entry in self.0.iter_mut() {
-            if !entry.watch {
-                continue;
-            }
+        for entry in self.0.iter_mut().filter(|e| e.watch) {
+            if let Err(e) = entry.scan(logger).await {
+                // If an error was observed, we will stop treating this Storage as being watchable, and
+                // instead clean up the target-mount files on the tmpfs and bind mount the source_mount_point
+                // to target_mount_point.
+                error!(logger, "error observed when watching: {:?}", e);
+                entry.watch = false;
 
-            match entry.scan(logger).await {
-                Err(error) => {
-                    // If an error was observed, we will stop treating this Storage as being watchable, and
-                    // instead clean up the target-mount files on the tmpfs and bind mount the source_mount_point
-                    // to target_mount_point.
-                    error!(logger, "error observed when watching: {:?}", error);
-                    entry.watch = false;
-
-                    // Remove destination contents, but not the directory itself, since this is
-                    // assumed to be bind-mounted into a container. If source/mount is a file, no need to cleanup
-                    if entry.target_mount_point.as_path().is_dir() {
-                        for dir_entry in std::fs::read_dir(entry.target_mount_point.as_path())? {
-                            let dir_entry = dir_entry?;
-                            let path = dir_entry.path();
-                            if dir_entry.file_type()?.is_dir() {
-                                tokio::fs::remove_dir_all(path).await?;
-                            } else {
-                                tokio::fs::remove_file(path).await?;
-                            }
+                // Remove destination contents, but not the directory itself, since this is
+                // assumed to be bind-mounted into a container. If source/mount is a file, no need to cleanup
+                if entry.target_mount_point.as_path().is_dir() {
+                    for dir_entry in std::fs::read_dir(entry.target_mount_point.as_path())? {
+                        let dir_entry = dir_entry?;
+                        let path = dir_entry.path();
+                        if dir_entry.file_type()?.is_dir() {
+                            tokio::fs::remove_dir_all(path).await?;
+                        } else {
+                            tokio::fs::remove_file(path).await?;
                         }
                     }
+                }
 
-                    //  - Create bind mount from source to destination
-                    BareMount::new(
-                        entry.source_mount_point.to_str().unwrap(),
-                        entry.target_mount_point.to_str().unwrap(),
-                        "bind",
-                        MsFlags::MS_BIND,
-                        "bind",
-                        logger,
-                    )
-                    .mount()?;
-                }
-                Ok(count) => {
-                    debug!(logger, "watched {} files", count);
-                }
-            };
+                //  - Create bind mount from source to destination
+                BareMount::new(
+                    entry.source_mount_point.to_str().unwrap(),
+                    entry.target_mount_point.to_str().unwrap(),
+                    "bind",
+                    MsFlags::MS_BIND,
+                    "bind",
+                    logger,
+                )
+                .mount()?;
+            }
         }
-
         Ok(())
     }
 }
